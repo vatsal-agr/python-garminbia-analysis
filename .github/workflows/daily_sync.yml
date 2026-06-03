@@ -29,5 +29,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
-          # Optional repo variable GOOGLE_SHEET_NAME — script defaults to "Garmin BIA Data"
+          TELEGRAM_LEGACY_REPORT: ${{ vars.TELEGRAM_LEGACY_REPORT }}
+          USER_HEIGHT_CM: ${{ vars.USER_HEIGHT_CM }}
+          WEIGHT_TARGET_MIN_KG: ${{ vars.WEIGHT_TARGET_MIN_KG }}
+          WEIGHT_TARGET_MAX_KG: ${{ vars.WEIGHT_TARGET_MAX_KG }}
         run: python -m garmin_bia_sync

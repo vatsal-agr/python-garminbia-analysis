@@ -57,7 +57,7 @@ python -m garmin_bia_sync
 **Success criteria**
 
 - Row in the sheet (weight, body fat, muscle, etc.).
-- Telegram: rolling-average report (`Sync Status`, `7 day rolling avg weight`, week deltas).
+- Telegram: decision report (7d rolling weight, FFM, FMI, muscle/wt, action line).
 - Token file: `~/.garminconnect/garmin_tokens.json`.
 
 Export tokens for GitHub:
@@ -84,9 +84,18 @@ Paste the JSON into the `GARMINTOKENS` repository secret.
 | `TELEGRAM_CHAT_ID` | Your chat ID |
 | `GOOGLE_CREDS_JSON` | Entire `creds.json` contents |
 
-Optional **variable**: `GOOGLE_SHEET_NAME` if the title is not `Garmin BIA Data`.
+Optional **repository variables** (Settings → Actions → Variables):
+
+| Variable | Purpose |
+|----------|---------|
+| `GOOGLE_SHEET_NAME` | Spreadsheet title if not `Garmin BIA Data` |
+| `USER_HEIGHT_CM` | Your height in cm (for FMI in decision Telegram) |
+| `TELEGRAM_LEGACY_REPORT` | `true` = old digest with daily readings; unset = decision format |
+| `WEIGHT_TARGET_MIN_KG` / `WEIGHT_TARGET_MAX_KG` | Lean-bulk band for weight status (default 0.10–0.20 kg/week) |
 
 With `GARMINTOKENS` set, Actions should not prompt for MFA. Keep email/password as fallback when tokens expire.
+
+**Index S2:** does not measure visceral fat; the visceral line appears only if your sheet has that data (other scales).
 
 ---
 

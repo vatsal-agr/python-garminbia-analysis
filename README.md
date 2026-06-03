@@ -15,21 +15,20 @@ Garmin Connect  →  sync  →  Google Sheet  →  Telegram report
 - **Automatic daily sync** (GitHub Actions) or run locally on demand
 - **One row per day** in Google Sheets: weight, BMI, body fat %, body water %, bone mass, muscle mass, visceral fat, metabolic age
 - **Smart catch-up**: each run syncs yesterday + today so a weigh-in *after* your cron time still lands on the next run
-- **Telegram digest** after a successful sync, for example:
+- **Telegram digest** after a successful sync (default: **decision** format):
 
   ```
-  Sync Status: "OK"
-  Date: "2026-06-03"
+  Date: 2026-06-03
 
-  7 day rolling avg weight: 67.15 kg
-  rolling avg delta: -0.42 kg
+  7d avg weight: 67.15 kg (+0.14 kg) ✅
+  7d avg FFM:    56.02 kg (+0.08 kg)
+  7d avg FMI:    5.21 kg/m² (-0.06)
+  7d muscle/wt:  46.0% (+0.2 pp)
 
-  current weight: 67.42 kg (+0.18 kg)
-  current bf: 16.6% (-0.2%)
-  current muscle: 31.01 kg (+0.05 kg)
+  → On track
   ```
 
-  Rolling stats are computed from your sheet history (so a one-time backfill improves the report).
+  Set GitHub variable `TELEGRAM_LEGACY_REPORT=true` for the older format with raw daily readings. Index S2 does not report visceral fat (that line is omitted automatically).
 
 ---
 
@@ -79,6 +78,7 @@ Full walkthrough: **[docs/setup.md](docs/setup.md)** (Telegram, GCP, secrets, cr
 ```
 garmin_bia_sync/          Main package (sync + Telegram report)
   sync.py
+  report.py
 scripts/
   export_tokens.py        Print token JSON for GitHub Secrets
 docs/
@@ -102,6 +102,9 @@ docs/
 | `SYNC_TIMEZONE` | Calendar timezone (default: `Asia/Kolkata`) |
 | `SYNC_LOOKBACK_DAYS` | Days synced per run (default: `2` = yesterday + today) |
 | `SYNC_DATE` | Optional single-day backfill (`YYYY-MM-DD`) |
+| `TELEGRAM_LEGACY_REPORT` | `true` = legacy digest; unset/`false` = decision report (default) |
+| `USER_HEIGHT_CM` | Height in cm for FMI in decision report (e.g. `184`) |
+| `WEIGHT_TARGET_MIN_KG` / `WEIGHT_TARGET_MAX_KG` | Weekly weight-rate band for status (default `0.10`–`0.20` kg) |
 
 Default GitHub cron: **11:00 IST** (`30 5 * * *` UTC). Edit `.github/workflows/daily_sync.yml` to change it.
 

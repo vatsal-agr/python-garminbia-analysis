@@ -7,11 +7,9 @@ import json
 import logging
 import os
 import sys
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from getpass import getpass
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import gspread
 import requests
@@ -21,6 +19,14 @@ from garminconnect import (
     GarminConnectAuthenticationError,
     GarminConnectConnectionError,
     GarminConnectTooManyRequestsError,
+)
+
+from garmin_bia_sync.report import (
+    format_telegram_report,
+    load_sheet_history,
+    merge_synced_rows,
+    pick_report_date,
+    today_local,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -41,14 +47,6 @@ SHEET_HEADERS = [
 ]
 
 GRAMS_THRESHOLD = 1000
-ROLLING_DAYS = 7
-
-
-@dataclass(frozen=True)
-class DayMetrics:
-    weight_kg: float | None
-    body_fat_pct: float | None
-    muscle_mass_kg: float | None
 
 
 def _parse_number(value: Any) -> float | None:
@@ -260,178 +258,6 @@ def format_day_summary(sync_date: str, row: list[Any], action: str) -> str:
     if muscle is not None:
         parts.append(f"{muscle} kg muscle")
     return " — ".join(parts)
-
-
-def metrics_from_row(row: list[Any]) -> DayMetrics:
-    return DayMetrics(
-        weight_kg=_parse_number(row[1] if len(row) > 1 else None),
-        body_fat_pct=_parse_number(row[3] if len(row) > 3 else None),
-        muscle_mass_kg=_parse_number(row[6] if len(row) > 6 else None),
-    )
-
-
-def load_sheet_history(worksheet: gspread.Worksheet) -> dict[str, DayMetrics]:
-    """Build date → metrics from the sheet (after sync, so includes new rows)."""
-    values = worksheet.get_all_values()
-    if not values:
-        return {}
-
-    headers = [str(cell).strip().lower() for cell in values[0]]
-    try:
-        date_col = headers.index("date")
-        weight_col = headers.index("weight_kg")
-        bf_col = headers.index("body_fat_pct")
-        muscle_col = headers.index("muscle_mass_kg")
-    except ValueError as exc:
-        raise ValueError(
-            "Sheet header row must include date, weight_kg, body_fat_pct, muscle_mass_kg. "
-            f"Found: {headers}"
-        ) from exc
-
-    history: dict[str, DayMetrics] = {}
-    for row in values[1:]:
-        if date_col >= len(row):
-            continue
-        day = str(row[date_col]).strip()
-        if not day:
-            continue
-        history[day] = DayMetrics(
-            weight_kg=_parse_number(row[weight_col] if weight_col < len(row) else None),
-            body_fat_pct=_parse_number(row[bf_col] if bf_col < len(row) else None),
-            muscle_mass_kg=_parse_number(row[muscle_col] if muscle_col < len(row) else None),
-        )
-    return history
-
-
-def merge_synced_rows(
-    history: dict[str, DayMetrics],
-    synced_rows: dict[str, list[Any]],
-) -> dict[str, DayMetrics]:
-    """Prefer in-memory rows from this run (avoids stale sheet reads)."""
-    merged = dict(history)
-    for day, row in synced_rows.items():
-        merged[day] = metrics_from_row(row)
-    return merged
-
-
-def _values_in_window(
-    history: dict[str, DayMetrics],
-    end: date,
-    days: int,
-    field: str,
-) -> list[float]:
-    values: list[float] = []
-    for offset in range(days - 1, -1, -1):
-        key = (end - timedelta(days=offset)).isoformat()
-        metrics = history.get(key)
-        if not metrics:
-            continue
-        value = getattr(metrics, field)
-        if value is not None:
-            values.append(value)
-    return values
-
-
-def _mean(values: list[float]) -> float | None:
-    if not values:
-        return None
-    return round(sum(values) / len(values), 2)
-
-
-def _format_delta(current: float | None, previous: float | None, unit: str) -> str:
-    if current is None or previous is None:
-        return "(n/a)"
-    diff = round(current - previous, 2)
-    if diff > 0:
-        return f"(+{diff}{unit})"
-    if diff < 0:
-        return f"({diff}{unit})"
-    return f"(+0{unit})"
-
-
-def pick_report_date(synced_dates: list[str], history: dict[str, DayMetrics]) -> date:
-    """Anchor stats on today if present in sheet, else latest synced day."""
-    today = today_local()
-    today_key = today.isoformat()
-    if today_key in synced_dates or today_key in history:
-        return today
-    if synced_dates:
-        return max(date.fromisoformat(d) for d in synced_dates)
-    return today
-
-
-def format_telegram_report(
-    history: dict[str, DayMetrics],
-    report_date: date,
-    *,
-    status: str = "OK",
-) -> str:
-    key = report_date.isoformat()
-    current = history.get(key)
-    if not current:
-        return (
-            f'Sync Status: "{status}"\n'
-            f'Date: "{key}"\n\n'
-            "No metrics on sheet for this date."
-        )
-
-    cur_weight = current.weight_kg
-    cur_bf = current.body_fat_pct
-    cur_muscle = current.muscle_mass_kg
-
-    this_window = _values_in_window(history, report_date, ROLLING_DAYS, "weight_kg")
-    prior_end = report_date - timedelta(days=ROLLING_DAYS)
-    prior_window = _values_in_window(history, prior_end, ROLLING_DAYS, "weight_kg")
-
-    rolling_avg = _mean(this_window)
-    prior_rolling_avg = _mean(prior_window)
-    rolling_delta = (
-        round(rolling_avg - prior_rolling_avg, 2)
-        if rolling_avg is not None and prior_rolling_avg is not None
-        else None
-    )
-
-    week_ago_key = (report_date - timedelta(days=ROLLING_DAYS)).isoformat()
-    week_ago = history.get(week_ago_key)
-
-    weight_line = (
-        f'{cur_weight} kg {_format_delta(cur_weight, week_ago.weight_kg if week_ago else None, " kg")}'
-        if cur_weight is not None
-        else "n/a"
-    )
-    bf_line = (
-        f'{cur_bf}% {_format_delta(cur_bf, week_ago.body_fat_pct if week_ago else None, "%")}'
-        if cur_bf is not None
-        else "n/a"
-    )
-    muscle_line = (
-        f"{cur_muscle} kg "
-        f"{_format_delta(cur_muscle, week_ago.muscle_mass_kg if week_ago else None, ' kg')}"
-        if cur_muscle is not None
-        else "n/a"
-    )
-
-    rolling_avg_text = f"{rolling_avg} kg" if rolling_avg is not None else "n/a"
-    if rolling_delta is not None:
-        sign = "+" if rolling_delta > 0 else ""
-        rolling_delta_text = f"{sign}{rolling_delta} kg"
-    else:
-        rolling_delta_text = "n/a"
-
-    return (
-        f'Sync Status: "{status}"\n'
-        f'Date: "{key}"\n\n'
-        f"7 day rolling avg weight: {rolling_avg_text}\n"
-        f"rolling avg delta: {rolling_delta_text}\n\n"
-        f"current weight: {weight_line}\n"
-        f"current bf: {bf_line}\n"
-        f"current muscle: {muscle_line}"
-    )
-
-
-def today_local() -> date:
-    tz_name = os.getenv("SYNC_TIMEZONE", "Asia/Kolkata")
-    return datetime.now(ZoneInfo(tz_name)).date()
 
 
 def dates_for_run() -> list[str]:

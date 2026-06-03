@@ -22,6 +22,8 @@ Future (v2+)   Garmin (wide)  →  your datastore  →  Telegram chat + Gemini
 
 ## Phase 0 — Foundation ✅ (current)
 
+**v1.1:** Decision-oriented Telegram report (`TELEGRAM_LEGACY_REPORT` toggle, rolling FFM/FMI/muscle-weight, action line) — [`garmin_bia_sync/report.py`](../garmin_bia_sync/report.py).
+
 | Item | Status |
 |------|--------|
 | Daily BIA sync to Google Sheets | ✅ |
