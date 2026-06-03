@@ -57,7 +57,7 @@ python -m garmin_bia_sync
 **Success criteria**
 
 - Row in the sheet (weight, body fat, muscle, etc.).
-- Telegram: `Garmin BIA sync OK`.
+- Telegram: rolling-average report (`Sync Status`, `7 day rolling avg weight`, week deltas).
 - Token file: `~/.garminconnect/garmin_tokens.json`.
 
 Export tokens for GitHub:

@@ -262,19 +262,56 @@ def format_day_summary(sync_date: str, row: list[Any], action: str) -> str:
     return " — ".join(parts)
 
 
+def metrics_from_row(row: list[Any]) -> DayMetrics:
+    return DayMetrics(
+        weight_kg=_parse_number(row[1] if len(row) > 1 else None),
+        body_fat_pct=_parse_number(row[3] if len(row) > 3 else None),
+        muscle_mass_kg=_parse_number(row[6] if len(row) > 6 else None),
+    )
+
+
 def load_sheet_history(worksheet: gspread.Worksheet) -> dict[str, DayMetrics]:
     """Build date → metrics from the sheet (after sync, so includes new rows)."""
+    values = worksheet.get_all_values()
+    if not values:
+        return {}
+
+    headers = [str(cell).strip().lower() for cell in values[0]]
+    try:
+        date_col = headers.index("date")
+        weight_col = headers.index("weight_kg")
+        bf_col = headers.index("body_fat_pct")
+        muscle_col = headers.index("muscle_mass_kg")
+    except ValueError as exc:
+        raise ValueError(
+            "Sheet header row must include date, weight_kg, body_fat_pct, muscle_mass_kg. "
+            f"Found: {headers}"
+        ) from exc
+
     history: dict[str, DayMetrics] = {}
-    for record in worksheet.get_all_records():
-        day = str(record.get("date", "")).strip()
+    for row in values[1:]:
+        if date_col >= len(row):
+            continue
+        day = str(row[date_col]).strip()
         if not day:
             continue
         history[day] = DayMetrics(
-            weight_kg=_parse_number(record.get("weight_kg")),
-            body_fat_pct=_parse_number(record.get("body_fat_pct")),
-            muscle_mass_kg=_parse_number(record.get("muscle_mass_kg")),
+            weight_kg=_parse_number(row[weight_col] if weight_col < len(row) else None),
+            body_fat_pct=_parse_number(row[bf_col] if bf_col < len(row) else None),
+            muscle_mass_kg=_parse_number(row[muscle_col] if muscle_col < len(row) else None),
         )
     return history
+
+
+def merge_synced_rows(
+    history: dict[str, DayMetrics],
+    synced_rows: dict[str, list[Any]],
+) -> dict[str, DayMetrics]:
+    """Prefer in-memory rows from this run (avoids stale sheet reads)."""
+    merged = dict(history)
+    for day, row in synced_rows.items():
+        merged[day] = metrics_from_row(row)
+    return merged
 
 
 def _values_in_window(
@@ -419,6 +456,7 @@ def main() -> int:
         garmin = credential_login_if_needed()
         worksheet = open_worksheet()
         synced_dates: list[str] = []
+        synced_rows: dict[str, list[Any]] = {}
 
         for sync_date in sync_dates:
             row = fetch_bia_row(garmin, sync_date)
@@ -432,14 +470,15 @@ def main() -> int:
 
             action = upsert_row(worksheet, row)
             synced_dates.append(sync_date)
+            synced_rows[sync_date] = row
             logger.info(format_day_summary(sync_date, row, action))
 
         if synced_dates:
-            history = load_sheet_history(worksheet)
+            history = merge_synced_rows(load_sheet_history(worksheet), synced_rows)
             report_date = pick_report_date(synced_dates, history)
             message = format_telegram_report(history, report_date, status="OK")
             send_telegram(message)
-            logger.info("Telegram report sent for %s", report_date.isoformat())
+            logger.info("Telegram report for %s:\n%s", report_date.isoformat(), message)
             return 0
 
         if single_day_mode:
