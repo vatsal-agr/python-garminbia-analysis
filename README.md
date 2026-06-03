@@ -70,6 +70,8 @@ pip install -r requirements.txt
 
 Full walkthrough: **[docs/setup.md](docs/setup.md)** (Telegram, GCP, secrets, cron, troubleshooting).
 
+**Roadmap:** **[docs/ROADMAP.md](docs/ROADMAP.md)** — Garmin intelligence (Telegram + Gemini), broader [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) metrics.
+
 ---
 
 ## Project layout
@@ -81,6 +83,7 @@ scripts/
   export_tokens.py        Print token JSON for GitHub Secrets
 docs/
   setup.md                Step-by-step setup
+  ROADMAP.md              Future: AI chat, extra Garmin APIs
 .github/workflows/
   daily_sync.yml          Scheduled sync (default 11:00 IST)
 ```
