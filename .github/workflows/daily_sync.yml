@@ -33,4 +33,9 @@ jobs:
           USER_HEIGHT_CM: ${{ vars.USER_HEIGHT_CM }}
           WEIGHT_TARGET_MIN_KG: ${{ vars.WEIGHT_TARGET_MIN_KG }}
           WEIGHT_TARGET_MAX_KG: ${{ vars.WEIGHT_TARGET_MAX_KG }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_ANALYSIS_ENABLED: ${{ vars.GEMINI_ANALYSIS_ENABLED }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          ANALYSIS_LOOKBACK_DAYS: ${{ vars.ANALYSIS_LOOKBACK_DAYS }}
+          USER_GOAL: ${{ vars.USER_GOAL }}
         run: python -m garmin_bia_sync

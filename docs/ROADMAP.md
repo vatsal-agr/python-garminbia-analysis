@@ -198,7 +198,7 @@ docs/
 
 - **[python-garminconnect](https://github.com/cyberjunky/python-garminconnect)** (cyberjunky) — Garmin access; MIT.
 - **gspread** — Sheets.
-- **Phase 2+:** `google-generativeai` (or official Gemini SDK), **FastAPI** / **Flask** for webhook, optional **matplotlib**.
+- **Phase 2+:** `google-genai` (Gemini SDK), **FastAPI** / **Flask** for webhook, optional **matplotlib**.
 
 Always pin versions in `requirements-intelligence.txt` separate from minimal sync requirements.
 

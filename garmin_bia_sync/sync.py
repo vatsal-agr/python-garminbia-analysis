@@ -12,7 +12,6 @@ from getpass import getpass
 from typing import Any
 
 import gspread
-import requests
 from google.oauth2.service_account import Credentials
 from garminconnect import (
     Garmin,
@@ -21,11 +20,16 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
+from garmin_bia_sync.analysis import maybe_send_coach_analysis
+from garmin_bia_sync.notify import send_telegram
 from garmin_bia_sync.report import (
+    format_daily_telegram,
     format_telegram_report,
+    has_weigh_in,
     load_sheet_history,
     merge_synced_rows,
-    pick_report_date,
+    plan_daily_telegram,
+    today_has_weigh_in,
     today_local,
 )
 
@@ -75,20 +79,6 @@ def _grams_field_to_kg(value: float | int | None) -> float | None:
     if number >= GRAMS_THRESHOLD:
         return round(number / 1000, 2)
     return round(number, 2)
-
-
-def send_telegram(message: str) -> None:
-    token = os.environ.get("TELEGRAM_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logger.warning("Telegram not configured; skipping notification")
-        return
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": message},
-        timeout=30,
-    )
-    response.raise_for_status()
 
 
 def init_garmin() -> Garmin:
@@ -299,21 +289,41 @@ def main() -> int:
             synced_rows[sync_date] = row
             logger.info(format_day_summary(sync_date, row, action))
 
-        if synced_dates:
-            history = merge_synced_rows(load_sheet_history(worksheet), synced_rows)
-            report_date = pick_report_date(synced_dates, history)
-            message = format_telegram_report(history, report_date, status="OK")
-            send_telegram(message)
-            logger.info("Telegram report for %s:\n%s", report_date.isoformat(), message)
-            return 0
+        history = load_sheet_history(worksheet)
+        if synced_rows:
+            history = merge_synced_rows(history, synced_rows)
 
         if single_day_mode:
+            if not synced_dates:
+                return 0
+            report_date = max(date.fromisoformat(d) for d in synced_dates)
+            if not has_weigh_in(history.get(report_date.isoformat())):
+                return 0
+            message = format_telegram_report(history, report_date, status="OK")
+            send_telegram(message)
+            logger.info("Telegram data digest for %s:\n%s", report_date.isoformat(), message)
+            if today_has_weigh_in(history):
+                maybe_send_coach_analysis(history, report_date, message)
             return 0
 
-        logger.info(
-            "No weigh-ins in sync window (%s); sheet unchanged.",
-            ", ".join(sync_dates),
-        )
+        plan = plan_daily_telegram(history, synced_dates)
+        if plan.send_telegram and plan.message:
+            send_telegram(plan.message)
+            if plan.report_date:
+                logger.info(
+                    "Telegram data digest for %s:\n%s",
+                    plan.report_date.isoformat(),
+                    plan.message,
+                )
+            else:
+                logger.info("Telegram: %s", plan.message.split("\n", 1)[0])
+        if plan.run_gemini and plan.report_date and plan.message:
+            maybe_send_coach_analysis(history, plan.report_date, plan.message)
+        elif not synced_dates:
+            logger.info(
+                "No weigh-ins in sync window (%s); sheet unchanged.",
+                ", ".join(sync_dates),
+            )
         return 0
 
     except Exception as exc:

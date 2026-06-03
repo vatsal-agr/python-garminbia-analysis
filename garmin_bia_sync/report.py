@@ -6,7 +6,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import gspread
@@ -298,15 +298,100 @@ def _action_line(weight_delta: float | None) -> str:
     return "→ Reduce slightly"
 
 
+NO_WEIGH_IN_TODAY_MESSAGE = (
+    "No weigh-in today.\n\n"
+    "No body-composition data was synced in this run's lookback window."
+)
+
+
+def has_weigh_in(metrics: DayMetrics | None) -> bool:
+    return metrics is not None and metrics.weight_kg is not None
+
+
+def today_has_weigh_in(history: dict[str, DayMetrics]) -> bool:
+    return has_weigh_in(history.get(today_local().isoformat()))
+
+
+def latest_weigh_in_date(
+    history: dict[str, DayMetrics],
+    dates: list[str],
+) -> date | None:
+    """Most recent date in *dates* that has weight on the sheet."""
+    candidates = [d for d in dates if has_weigh_in(history.get(d))]
+    if not candidates:
+        return None
+    return max(date.fromisoformat(d) for d in candidates)
+
+
 def pick_report_date(synced_dates: list[str], history: dict[str, DayMetrics]) -> date:
-    """Anchor stats on today if present in sheet, else latest synced day."""
+    """Report anchor: today if weighed in today, else latest day with weight in *synced_dates*."""
     today = today_local()
-    today_key = today.isoformat()
-    if today_key in synced_dates or today_key in history:
+    if today_has_weigh_in(history):
         return today
-    if synced_dates:
-        return max(date.fromisoformat(d) for d in synced_dates)
+    latest = latest_weigh_in_date(history, synced_dates)
+    if latest is not None:
+        return latest
     return today
+
+
+@dataclass(frozen=True)
+class DailyTelegramPlan:
+    """What to send after a scheduled (non-SYNC_DATE) sync run."""
+
+    send_telegram: bool
+    message: str | None
+    report_date: date | None
+    run_gemini: bool
+
+
+def format_daily_telegram(
+    history: dict[str, DayMetrics],
+    report_date: date,
+    *,
+    scope: Literal["today", "stale"] = "today",
+    status: str = "OK",
+) -> str:
+    body = format_telegram_report(history, report_date, status=status)
+    if scope == "today":
+        return body
+    today_key = today_local().isoformat()
+    return (
+        f"No weigh-in today ({today_key}).\n\n"
+        f"Latest data — {report_date.isoformat()}:\n\n"
+        f"{body}"
+    )
+
+
+def plan_daily_telegram(
+    history: dict[str, DayMetrics],
+    synced_dates: list[str],
+) -> DailyTelegramPlan:
+    """Decide digest vs no-data message; Gemini only when today has a weigh-in."""
+    today = today_local()
+
+    if today_has_weigh_in(history):
+        return DailyTelegramPlan(
+            send_telegram=True,
+            message=format_daily_telegram(history, today, scope="today"),
+            report_date=today,
+            run_gemini=True,
+        )
+
+    latest = latest_weigh_in_date(history, synced_dates)
+    if latest is not None:
+        return DailyTelegramPlan(
+            send_telegram=True,
+            message=format_daily_telegram(history, latest, scope="stale"),
+            report_date=latest,
+            run_gemini=False,
+        )
+
+    return DailyTelegramPlan(
+        send_telegram=True,
+        message=NO_WEIGH_IN_TODAY_MESSAGE,
+        report_date=None,
+        run_gemini=False,
+    )
 
 
 def format_telegram_report(

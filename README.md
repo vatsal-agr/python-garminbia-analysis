@@ -5,7 +5,7 @@ Weigh in on your Garmin Index (or any Garmin flow that records body composition)
 No Garmin app checking. No spreadsheet formulas to maintain. One small Python job, free to run on GitHub Actions.
 
 ```
-Garmin Connect  →  sync  →  Google Sheet  →  Telegram report
+Garmin Connect  →  sync  →  Google Sheet  →  Telegram (data digest + optional Gemini coach)
 ```
 
 ---
@@ -29,6 +29,8 @@ Garmin Connect  →  sync  →  Google Sheet  →  Telegram report
   ```
 
   Set GitHub variable `TELEGRAM_LEGACY_REPORT=true` for the older format with raw daily readings. Index S2 does not report visceral fat (that line is omitted automatically).
+
+- **Optional second message (Gemini):** evidence-based daily coach narrative (Dr. Mike / RP–style lens) over your sheet history — enable with `GEMINI_ANALYSIS_ENABLED=true` and secret `GEMINI_API_KEY`.
 
 ---
 
@@ -76,9 +78,11 @@ Full walkthrough: **[docs/setup.md](docs/setup.md)** (Telegram, GCP, secrets, cr
 ## Project layout
 
 ```
-garmin_bia_sync/          Main package (sync + Telegram report)
+garmin_bia_sync/          Main package
   sync.py
-  report.py
+  report.py               Numeric Telegram digest
+  analysis.py             Optional Gemini coach (message 2)
+  notify.py               Telegram send
 scripts/
   export_tokens.py        Print token JSON for GitHub Secrets
 docs/
@@ -105,6 +109,11 @@ docs/
 | `TELEGRAM_LEGACY_REPORT` | `true` = legacy digest; unset/`false` = decision report (default) |
 | `USER_HEIGHT_CM` | Height in cm for FMI in decision report (e.g. `184`) |
 | `WEIGHT_TARGET_MIN_KG` / `WEIGHT_TARGET_MAX_KG` | Weekly weight-rate band for status (default `0.10`–`0.20` kg) |
+| `GEMINI_ANALYSIS_ENABLED` | `true` = send coach message after data digest |
+| `GEMINI_API_KEY` | Google AI Studio key (GitHub **secret**, not variable) |
+| `GEMINI_MODEL` | Optional (default `gemini-3.5-flash`) |
+| `ANALYSIS_LOOKBACK_DAYS` | Days of sheet history sent to Gemini (default `28`) |
+| `USER_GOAL` | Your goal text for the coach (lean bulk, etc.) |
 
 Default GitHub cron: **11:00 IST** (`30 5 * * *` UTC). Edit `.github/workflows/daily_sync.yml` to change it.
 

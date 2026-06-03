@@ -92,6 +92,12 @@ Optional **repository variables** (Settings → Actions → Variables):
 | `USER_HEIGHT_CM` | Your height in cm (for FMI in decision Telegram) |
 | `TELEGRAM_LEGACY_REPORT` | `true` = old digest with daily readings; unset = decision format |
 | `WEIGHT_TARGET_MIN_KG` / `WEIGHT_TARGET_MAX_KG` | Lean-bulk band for weight status (default 0.10–0.20 kg/week) |
+| `GEMINI_ANALYSIS_ENABLED` | `true` to send a second Telegram message (Gemini coach) |
+| `GEMINI_MODEL` | Optional (default `gemini-3.5-flash`) |
+| `ANALYSIS_LOOKBACK_DAYS` | History depth for coach (default `28`) |
+| `USER_GOAL` | Free-text goal for the analyst prompt |
+
+**Secret:** `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey).
 
 With `GARMINTOKENS` set, Actions should not prompt for MFA. Keep email/password as fallback when tokens expire.
 

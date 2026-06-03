@@ -9,14 +9,19 @@ import pytest
 
 from garmin_bia_sync.report import (
     DayMetrics,
+    NO_WEIGH_IN_TODAY_MESSAGE,
     _action_line,
     _ffm,
     _ffm_values_in_window,
     _rolling_delta,
     _weight_status_icon,
+    format_daily_telegram,
     format_telegram_report,
     format_telegram_report_decision,
+    has_weigh_in,
     legacy_report_enabled,
+    plan_daily_telegram,
+    today_has_weigh_in,
 )
 
 
@@ -88,3 +93,45 @@ def test_fmi_missing_height(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("USER_HEIGHT_CM", raising=False)
     msg = format_telegram_report_decision(_history(), date(2026, 6, 7))
     assert "USER_HEIGHT_CM" in msg
+
+
+def test_plan_today_weigh_in_runs_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("garmin_bia_sync.report.today_local", lambda: date(2026, 6, 7))
+    history = _history()
+    plan = plan_daily_telegram(history, ["2026-06-07"])
+    assert plan.run_gemini is True
+    assert plan.report_date == date(2026, 6, 7)
+    assert "No weigh-in today" not in (plan.message or "")
+
+
+def test_plan_yesterday_only_stale_digest_no_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("garmin_bia_sync.report.today_local", lambda: date(2026, 6, 7))
+    history = _history()
+    del history["2026-06-07"]
+    plan = plan_daily_telegram(history, ["2026-06-06"])
+    assert plan.run_gemini is False
+    assert plan.report_date == date(2026, 6, 6)
+    assert plan.message is not None
+    assert "No weigh-in today (2026-06-07)" in plan.message
+    assert "Latest data — 2026-06-06" in plan.message
+    assert "Date: 2026-06-06" in plan.message
+
+
+def test_plan_no_data_in_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("garmin_bia_sync.report.today_local", lambda: date(2026, 6, 7))
+    history = _history()
+    del history["2026-06-07"]
+    del history["2026-06-06"]
+    plan = plan_daily_telegram(history, [])
+    assert plan.run_gemini is False
+    assert plan.message == NO_WEIGH_IN_TODAY_MESSAGE
+    assert plan.report_date is None
+
+
+def test_today_has_weigh_in_requires_weight(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("garmin_bia_sync.report.today_local", lambda: date(2026, 6, 7))
+    history = {"2026-06-07": DayMetrics(None, 16.0, 31.0, None)}
+    assert has_weigh_in(history["2026-06-07"]) is False
+    assert today_has_weigh_in(history) is False
