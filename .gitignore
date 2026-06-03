@@ -1,0 +1,9 @@
+.env
+creds.json
+*.json.bak
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.Python
+.garminconnect/
