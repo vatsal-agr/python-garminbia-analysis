@@ -1,4 +1,5 @@
 .env
+.env.local
 creds.json
 *.json.bak
 __pycache__/

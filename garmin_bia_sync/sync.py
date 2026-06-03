@@ -7,10 +7,11 @@ import json
 import logging
 import os
 import sys
-from datetime import date, datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from getpass import getpass
-from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import gspread
 import requests
@@ -40,6 +41,23 @@ SHEET_HEADERS = [
 ]
 
 GRAMS_THRESHOLD = 1000
+ROLLING_DAYS = 7
+
+
+@dataclass(frozen=True)
+class DayMetrics:
+    weight_kg: float | None
+    body_fat_pct: float | None
+    muscle_mass_kg: float | None
+
+
+def _parse_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _grams_to_kg(value: float | int | None) -> float | None:
@@ -232,35 +250,205 @@ def _col_letter(count: int) -> str:
     return letters
 
 
-def format_success_message(sync_date: str, row: list[Any], action: str) -> str:
+def format_day_summary(sync_date: str, row: list[Any], action: str) -> str:
     weight, body_fat, muscle = row[1], row[3], row[6]
-    parts = [f"Garmin BIA sync OK ({action})", f"Date: {sync_date}"]
+    parts = [f"{sync_date} ({action})"]
     if weight is not None:
-        parts.append(f"Weight: {weight} kg")
+        parts.append(f"{weight} kg")
     if body_fat is not None:
-        parts.append(f"Body fat: {body_fat}%")
+        parts.append(f"{body_fat}% fat")
     if muscle is not None:
-        parts.append(f"Muscle: {muscle} kg")
-    return "\n".join(parts)
+        parts.append(f"{muscle} kg muscle")
+    return " — ".join(parts)
+
+
+def load_sheet_history(worksheet: gspread.Worksheet) -> dict[str, DayMetrics]:
+    """Build date → metrics from the sheet (after sync, so includes new rows)."""
+    history: dict[str, DayMetrics] = {}
+    for record in worksheet.get_all_records():
+        day = str(record.get("date", "")).strip()
+        if not day:
+            continue
+        history[day] = DayMetrics(
+            weight_kg=_parse_number(record.get("weight_kg")),
+            body_fat_pct=_parse_number(record.get("body_fat_pct")),
+            muscle_mass_kg=_parse_number(record.get("muscle_mass_kg")),
+        )
+    return history
+
+
+def _values_in_window(
+    history: dict[str, DayMetrics],
+    end: date,
+    days: int,
+    field: str,
+) -> list[float]:
+    values: list[float] = []
+    for offset in range(days - 1, -1, -1):
+        key = (end - timedelta(days=offset)).isoformat()
+        metrics = history.get(key)
+        if not metrics:
+            continue
+        value = getattr(metrics, field)
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def _format_delta(current: float | None, previous: float | None, unit: str) -> str:
+    if current is None or previous is None:
+        return "(n/a)"
+    diff = round(current - previous, 2)
+    if diff > 0:
+        return f"(+{diff}{unit})"
+    if diff < 0:
+        return f"({diff}{unit})"
+    return f"(+0{unit})"
+
+
+def pick_report_date(synced_dates: list[str], history: dict[str, DayMetrics]) -> date:
+    """Anchor stats on today if present in sheet, else latest synced day."""
+    today = today_local()
+    today_key = today.isoformat()
+    if today_key in synced_dates or today_key in history:
+        return today
+    if synced_dates:
+        return max(date.fromisoformat(d) for d in synced_dates)
+    return today
+
+
+def format_telegram_report(
+    history: dict[str, DayMetrics],
+    report_date: date,
+    *,
+    status: str = "OK",
+) -> str:
+    key = report_date.isoformat()
+    current = history.get(key)
+    if not current:
+        return (
+            f'Sync Status: "{status}"\n'
+            f'Date: "{key}"\n\n'
+            "No metrics on sheet for this date."
+        )
+
+    cur_weight = current.weight_kg
+    cur_bf = current.body_fat_pct
+    cur_muscle = current.muscle_mass_kg
+
+    this_window = _values_in_window(history, report_date, ROLLING_DAYS, "weight_kg")
+    prior_end = report_date - timedelta(days=ROLLING_DAYS)
+    prior_window = _values_in_window(history, prior_end, ROLLING_DAYS, "weight_kg")
+
+    rolling_avg = _mean(this_window)
+    prior_rolling_avg = _mean(prior_window)
+    rolling_delta = (
+        round(rolling_avg - prior_rolling_avg, 2)
+        if rolling_avg is not None and prior_rolling_avg is not None
+        else None
+    )
+
+    week_ago_key = (report_date - timedelta(days=ROLLING_DAYS)).isoformat()
+    week_ago = history.get(week_ago_key)
+
+    weight_line = (
+        f'{cur_weight} kg {_format_delta(cur_weight, week_ago.weight_kg if week_ago else None, " kg")}'
+        if cur_weight is not None
+        else "n/a"
+    )
+    bf_line = (
+        f'{cur_bf}% {_format_delta(cur_bf, week_ago.body_fat_pct if week_ago else None, "%")}'
+        if cur_bf is not None
+        else "n/a"
+    )
+    muscle_line = (
+        f"{cur_muscle} kg "
+        f"{_format_delta(cur_muscle, week_ago.muscle_mass_kg if week_ago else None, ' kg')}"
+        if cur_muscle is not None
+        else "n/a"
+    )
+
+    rolling_avg_text = f"{rolling_avg} kg" if rolling_avg is not None else "n/a"
+    if rolling_delta is not None:
+        sign = "+" if rolling_delta > 0 else ""
+        rolling_delta_text = f"{sign}{rolling_delta} kg"
+    else:
+        rolling_delta_text = "n/a"
+
+    return (
+        f'Sync Status: "{status}"\n'
+        f'Date: "{key}"\n\n'
+        f"7 day rolling avg weight: {rolling_avg_text}\n"
+        f"rolling avg delta: {rolling_delta_text}\n\n"
+        f"current weight: {weight_line}\n"
+        f"current bf: {bf_line}\n"
+        f"current muscle: {muscle_line}"
+    )
+
+
+def today_local() -> date:
+    tz_name = os.getenv("SYNC_TIMEZONE", "Asia/Kolkata")
+    return datetime.now(ZoneInfo(tz_name)).date()
+
+
+def dates_for_run() -> list[str]:
+    """Dates to sync this run: single day if SYNC_DATE set, else lookback window."""
+    explicit = os.getenv("SYNC_DATE")
+    if explicit:
+        return [explicit]
+
+    lookback = max(1, int(os.getenv("SYNC_LOOKBACK_DAYS", "2")))
+    end = today_local()
+    return [
+        (end - timedelta(days=offset)).isoformat()
+        for offset in range(lookback - 1, -1, -1)
+    ]
 
 
 def main() -> int:
-    sync_date = os.getenv("SYNC_DATE", date.today().isoformat())
+    sync_dates = dates_for_run()
+    single_day_mode = os.getenv("SYNC_DATE") is not None
 
     try:
         garmin = credential_login_if_needed()
-        row = fetch_bia_row(garmin, sync_date)
-        if row is None:
-            message = f"No BIA/weight data for {sync_date} on Garmin Connect."
-            logger.warning(message)
+        worksheet = open_worksheet()
+        synced_dates: list[str] = []
+
+        for sync_date in sync_dates:
+            row = fetch_bia_row(garmin, sync_date)
+            if row is None:
+                logger.info("No Garmin data for %s", sync_date)
+                if single_day_mode:
+                    message = f"No BIA/weight data for {sync_date} on Garmin Connect."
+                    logger.warning(message)
+                    send_telegram(message)
+                continue
+
+            action = upsert_row(worksheet, row)
+            synced_dates.append(sync_date)
+            logger.info(format_day_summary(sync_date, row, action))
+
+        if synced_dates:
+            history = load_sheet_history(worksheet)
+            report_date = pick_report_date(synced_dates, history)
+            message = format_telegram_report(history, report_date, status="OK")
             send_telegram(message)
+            logger.info("Telegram report sent for %s", report_date.isoformat())
             return 0
 
-        worksheet = open_worksheet()
-        action = upsert_row(worksheet, row)
-        message = format_success_message(sync_date, row, action)
-        logger.info(message.replace("\n", " | "))
-        send_telegram(message)
+        if single_day_mode:
+            return 0
+
+        logger.info(
+            "No weigh-ins in sync window (%s); sheet unchanged.",
+            ", ".join(sync_dates),
+        )
         return 0
 
     except Exception as exc:
@@ -271,7 +459,3 @@ def main() -> int:
         except Exception:
             logger.exception("Could not send Telegram error alert")
         return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -17,7 +17,7 @@ def main() -> int:
 
     if not path.is_file():
         print(
-            "No token file found. Run `python garmin_sync.py` locally first "
+            "No token file found. Run `python -m garmin_bia_sync` locally first "
             "(complete MFA once).",
             file=sys.stderr,
         )

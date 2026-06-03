@@ -2,8 +2,8 @@ name: Daily Garmin BIA Sync
 
 on:
   schedule:
-    # 07:00 UTC daily — change to your preferred time (cron is always UTC)
-    - cron: "0 7 * * *"
+    # 11:00 IST (05:30 UTC) — GitHub cron is always UTC
+    - cron: "30 5 * * *"
   workflow_dispatch:
 
 jobs:
@@ -30,4 +30,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
           # Optional repo variable GOOGLE_SHEET_NAME — script defaults to "Garmin BIA Data"
-        run: python garmin_sync.py
+        run: python -m garmin_bia_sync
