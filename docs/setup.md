@@ -66,7 +66,14 @@ Export tokens for GitHub:
 python scripts/export_tokens.py
 ```
 
-Paste the JSON into the `GARMINTOKENS` repository secret.
+Paste the JSON into the `GARMINTOKENS` repository secret (optional if using Gmail OTP).
+
+**Backfill a date range** (local):
+
+```bash
+./scripts/run_local.sh history_pull.py --start 2026-06-10 --end 2026-06-22
+./scripts/run_local.sh history_pull.py --notify --notify-only --report-date 2026-06-22 --with-gemini
+```
 
 ---
 

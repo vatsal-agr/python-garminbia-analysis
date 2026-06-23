@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import sys
-import time
 from datetime import date, datetime, timedelta, timezone
 from getpass import getpass
 from pathlib import Path
@@ -23,7 +22,13 @@ from garminconnect import (
 )
 
 from garmin_bia_sync.analysis import maybe_send_coach_analysis
-from garmin_bia_sync.gmail_otp import fetch_garmin_otp_from_gmail, gmail_otp_configured
+from garmin_bia_sync.garmin_login import login_with_gmail_otp, patch_gmail_otp_mfa
+from garmin_bia_sync.gmail_otp import (
+    anchor_otp_at_mfa_challenge,
+    begin_otp_session,
+    fetch_garmin_otp_from_gmail,
+    gmail_otp_configured,
+)
 from garmin_bia_sync.notify import send_telegram
 from garmin_bia_sync.report import (
     format_daily_telegram,
@@ -58,11 +63,10 @@ DEFAULT_TOKENSTORE = "~/.garminconnect"
 
 
 def _effective_tokenstore() -> str:
-    """When Gmail OTP is enabled, use a file path so each run re-authenticates."""
-    raw = os.getenv("GARMINTOKENS", DEFAULT_TOKENSTORE)
-    if gmail_otp_configured() and len(raw) > 512:
+    """When Gmail OTP is enabled, always use a writable path (fresh login each run)."""
+    if gmail_otp_configured():
         return str(Path(DEFAULT_TOKENSTORE).expanduser())
-    return raw
+    return os.getenv("GARMINTOKENS", DEFAULT_TOKENSTORE)
 
 
 def _garmin_token_file_paths() -> list[Path]:
@@ -104,15 +108,64 @@ def _prompt_mfa() -> str:
     if mfa_code:
         return mfa_code.strip()
     if gmail_otp_configured():
-        after_ts = int(time.time())
-        logger.info("GMAIL_OAUTH_JSON set; polling Gmail for Garmin MFA code (after_ts=%s)", after_ts)
-        return fetch_garmin_otp_from_gmail(after_ts=after_ts)
+        logger.info("Polling Gmail for Garmin MFA code")
+        return fetch_garmin_otp_from_gmail()
     if sys.stdin.isatty():
         return input("Garmin MFA code: ").strip()
     raise GarminConnectAuthenticationError(
         "MFA required but no interactive terminal. Set GARMIN_MFA, GMAIL_OAUTH_JSON, "
         "or GARMINTOKENS."
     )
+
+
+def _is_mfa_failure(exc: GarminConnectAuthenticationError) -> bool:
+    text = str(exc).lower()
+    return "mfa" in text
+
+
+def _login_with_credentials(tokenstore: str) -> Garmin:
+    email = os.getenv("GARMIN_EMAIL")
+    password = os.getenv("GARMIN_PASSWORD")
+    if not email or not password:
+        if not sys.stdin.isatty():
+            raise GarminConnectAuthenticationError(
+                "GARMIN_EMAIL and GARMIN_PASSWORD are required for login."
+            )
+        email = input("Garmin email: ").strip()
+        password = getpass("Garmin password: ")
+
+    garmin = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa)
+    if gmail_otp_configured():
+        patch_gmail_otp_mfa(garmin.client)
+        original_client_login = garmin.client.login
+
+        def _gmail_otp_client_login(
+            login_email: str,
+            login_password: str,
+            prompt_mfa: Any = None,
+            return_on_mfa: bool = False,
+        ) -> tuple[str | None, Any]:
+            if return_on_mfa:
+                return original_client_login(
+                    login_email,
+                    login_password,
+                    prompt_mfa=prompt_mfa,
+                    return_on_mfa=True,
+                )
+            login_with_gmail_otp(
+                garmin.client,
+                login_email,
+                login_password,
+                prompt_mfa or _prompt_mfa,
+                on_mfa_required=anchor_otp_at_mfa_challenge,
+            )
+            return None, None
+
+        garmin.client.login = _gmail_otp_client_login  # type: ignore[method-assign]
+
+    garmin.login(tokenstore)
+    logger.info("Garmin login OK. Tokens saved under %s", tokenstore)
+    return garmin
 
 
 def _parse_number(value: Any) -> float | None:
@@ -167,24 +220,21 @@ def init_garmin() -> Garmin:
 
 
 def credential_login_if_needed() -> Garmin:
-    """Interactive login when tokens are missing (first local run)."""
+    """Login via saved tokens (local) or credentials + optional Gmail MFA (CI)."""
     tokenstore = _effective_tokenstore()
+
+    if gmail_otp_configured():
+        begin_otp_session()
+        return _login_with_credentials(tokenstore)
+
     try:
         return init_garmin()
-    except GarminConnectAuthenticationError:
-        pass
+    except GarminConnectAuthenticationError as exc:
+        if _is_mfa_failure(exc):
+            raise
+        logger.info("Saved Garmin tokens unavailable; logging in with credentials")
 
-    email = os.getenv("GARMIN_EMAIL") or input("Garmin email: ").strip()
-    password = os.getenv("GARMIN_PASSWORD") or getpass("Garmin password: ")
-
-    garmin = Garmin(
-        email=email,
-        password=password,
-        prompt_mfa=_prompt_mfa,
-    )
-    garmin.login(tokenstore)
-    logger.info("Garmin login OK. Tokens saved under %s", tokenstore)
-    return garmin
+    return _login_with_credentials(tokenstore)
 
 
 def pick_sample(body: dict[str, Any]) -> dict[str, Any] | None:

@@ -223,7 +223,7 @@ def _is_quota_error(exc: BaseException) -> bool:
     return "429" in text or "quota" in text or "resource_exhausted" in text
 
 
-def _coach_error_telegram(exc: BaseException) -> str:
+def coach_error_telegram(exc: BaseException) -> str:
     if _is_quota_error(exc):
         model = _model_name()
         return (
@@ -331,4 +331,4 @@ def maybe_send_coach_analysis(
         logger.info("Gemini coach analysis sent (%s chars)", len(coach))
     except Exception as exc:
         logger.error("Gemini analysis failed: %s", exc)
-        send_telegram(_coach_error_telegram(exc))
+        send_telegram(coach_error_telegram(exc))

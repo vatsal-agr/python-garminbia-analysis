@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from garmin_bia_sync.gmail_otp import (
+    begin_otp_session,
     extract_body_text,
     extract_otp_from_text,
     fetch_garmin_otp_from_gmail,
@@ -21,14 +23,30 @@ def test_gmail_otp_not_configured_by_default(monkeypatch: pytest.MonkeyPatch) ->
     assert gmail_otp_configured() is False
 
 
-def test_extract_otp_from_plain_text() -> None:
-    body = "Your Garmin verification code is 482913. It expires in 10 minutes."
+def test_extract_otp_prefers_passcode_context() -> None:
+    body = "Footer ref 123456. Your security passcode is 482913."
     assert extract_otp_from_text(body) == "482913"
 
 
 def test_extract_otp_from_html() -> None:
-    body = "<p>Enter code <b>123456</b> to verify</p>"
-    assert extract_otp_from_text(body) == "123456"
+    body = "<p>Enter code <b>547291</b> to verify</p>"
+    assert extract_otp_from_text(body) == "547291"
+
+
+def test_extract_otp_prefers_one_time_code_phrase() -> None:
+    body = "Reference 654321. Your one-time code is 482913."
+    assert extract_otp_from_text(body) == "482913"
+
+
+def test_anchor_otp_at_mfa_challenge(monkeypatch: pytest.MonkeyPatch) -> None:
+    from garmin_bia_sync.gmail_otp import _session, anchor_otp_at_mfa_challenge, begin_otp_session
+
+    monkeypatch.setattr("garmin_bia_sync.gmail_otp.time.time", lambda: 1_000_000)
+    begin_otp_session()
+    old_anchor = _session.anchor_ts
+    anchor_otp_at_mfa_challenge()
+    assert _session.mfa_challenge_ts == 999_995
+    assert _session.anchor_ts >= old_anchor
 
 
 def test_extract_body_text_nested_parts() -> None:
@@ -46,12 +64,14 @@ def test_extract_body_text_nested_parts() -> None:
 
 def test_load_credentials_missing_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GMAIL_OAUTH_JSON", raising=False)
+    begin_otp_session()
     with pytest.raises(ValueError, match="not set"):
         fetch_garmin_otp_from_gmail(wait_seconds=5, poll_interval=5)
 
 
 def test_load_credentials_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GMAIL_OAUTH_JSON", "not-json")
+    begin_otp_session()
     with pytest.raises(ValueError, match="not valid JSON"):
         fetch_garmin_otp_from_gmail(wait_seconds=5, poll_interval=5)
 
@@ -66,15 +86,18 @@ def test_fetch_otp_success_on_second_poll(monkeypatch: pytest.MonkeyPatch) -> No
         "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
     }
     monkeypatch.setenv("GMAIL_OAUTH_JSON", json.dumps(oauth))
+    begin_otp_session()
 
     encoded = base64.urlsafe_b64encode(
-        b"Your verification code is 998877"
+        b"Your security passcode is 998877"
     ).decode()
+    now_ms = int(time.time()) * 1000
     message = {
+        "internalDate": str(now_ms),
         "payload": {
             "mimeType": "text/plain",
             "body": {"data": encoded},
-        }
+        },
     }
 
     service = MagicMock()
@@ -95,6 +118,40 @@ def test_fetch_otp_success_on_second_poll(monkeypatch: pytest.MonkeyPatch) -> No
     assert list_mock.return_value.execute.call_count == 2
 
 
+def test_fetch_otp_refuses_second_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
+    oauth = {
+        "token": "t",
+        "refresh_token": "r",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": "cid",
+        "client_secret": "sec",
+        "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    }
+    monkeypatch.setenv("GMAIL_OAUTH_JSON", json.dumps(oauth))
+    begin_otp_session()
+
+    encoded = base64.urlsafe_b64encode(b"security passcode 111222").decode()
+    now_ms = int(time.time()) * 1000
+    message = {
+        "internalDate": str(now_ms),
+        "payload": {"body": {"data": encoded}},
+    }
+
+    service = MagicMock()
+    service.users.return_value.messages.return_value.list.return_value.execute.return_value = (
+        {"messages": [{"id": "msg1"}]}
+    )
+    service.users.return_value.messages.return_value.get.return_value.execute.return_value = (
+        message
+    )
+
+    with patch("garmin_bia_sync.gmail_otp._gmail_service", return_value=service):
+        fetch_garmin_otp_from_gmail(wait_seconds=5, poll_interval=5)
+
+    with pytest.raises(RuntimeError, match="already fetched"):
+        fetch_garmin_otp_from_gmail(wait_seconds=5, poll_interval=5)
+
+
 def test_fetch_otp_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     oauth = {
         "token": "t",
@@ -105,6 +162,7 @@ def test_fetch_otp_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
         "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
     }
     monkeypatch.setenv("GMAIL_OAUTH_JSON", json.dumps(oauth))
+    begin_otp_session()
 
     service = MagicMock()
     service.users.return_value.messages.return_value.list.return_value.execute.return_value = (

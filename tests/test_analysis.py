@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 from garmin_bia_sync.analysis import (
     DEFAULT_MODEL,
-    _coach_error_telegram,
+    coach_error_telegram,
     _is_quota_error,
     _system_prompt,
     analysis_enabled,
@@ -56,6 +56,6 @@ def test_default_model_is_gemini_35_flash() -> None:
 
 
 def test_coach_error_telegram_quota() -> None:
-    msg = _coach_error_telegram(Exception("429 quota exceeded"))
+    msg = coach_error_telegram(Exception("429 quota exceeded"))
     assert "quota" in msg.lower()
     assert _is_quota_error(Exception("RESOURCE_EXHAUSTED"))
