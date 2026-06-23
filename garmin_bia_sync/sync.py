@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from getpass import getpass
 from pathlib import Path
@@ -103,8 +104,9 @@ def _prompt_mfa() -> str:
     if mfa_code:
         return mfa_code.strip()
     if gmail_otp_configured():
-        logger.info("GMAIL_OAUTH_JSON set; polling Gmail for Garmin MFA code")
-        return fetch_garmin_otp_from_gmail()
+        after_ts = int(time.time())
+        logger.info("GMAIL_OAUTH_JSON set; polling Gmail for Garmin MFA code (after_ts=%s)", after_ts)
+        return fetch_garmin_otp_from_gmail(after_ts=after_ts)
     if sys.stdin.isatty():
         return input("Garmin MFA code: ").strip()
     raise GarminConnectAuthenticationError(

@@ -15,9 +15,8 @@ from google.oauth2.credentials import Credentials
 
 logger = logging.getLogger(__name__)
 
-GMAIL_QUERY = "from:no-reply@garmin.com subject:verification newer_than:3m"
+_GMAIL_QUERY_TEMPLATE = "from:alerts@account.garmin.com subject:\"security passcode\" after:{after_ts}"
 OTP_PATTERN = re.compile(r"\b(\d{6})\b")
-
 
 def gmail_otp_configured() -> bool:
     return bool(os.environ.get("GMAIL_OAUTH_JSON", "").strip())
@@ -86,11 +85,11 @@ def _gmail_service():
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
-def _poll_gmail_for_otp(service: Any) -> str | None:
+def _poll_gmail_for_otp(service: Any, query: str) -> str | None:
     result = (
         service.users()
         .messages()
-        .list(userId="me", q=GMAIL_QUERY, maxResults=10)
+        .list(userId="me", q=query, maxResults=10)
         .execute()
     )
     for ref in result.get("messages") or []:
@@ -109,14 +108,20 @@ def _poll_gmail_for_otp(service: Any) -> str | None:
 
 
 def fetch_garmin_otp_from_gmail(
-    wait_seconds: int = 90,
+    wait_seconds: int = 150,
     poll_interval: int = 5,
+    after_ts: int | None = None,
 ) -> str:
     """Poll Gmail for a Garmin verification code. Never logs the OTP."""
     if wait_seconds <= 0:
         raise ValueError("wait_seconds must be positive")
     if poll_interval <= 0:
         raise ValueError("poll_interval must be positive")
+
+    if after_ts is None:
+        after_ts = int(time.time()) - 60
+    query = _GMAIL_QUERY_TEMPLATE.format(after_ts=after_ts)
+    logger.info("Gmail OTP query anchored at ts=%s", after_ts)
 
     service = _gmail_service()
     max_attempts = max(1, (wait_seconds + poll_interval - 1) // poll_interval)
@@ -127,7 +132,7 @@ def fetch_garmin_otp_from_gmail(
             attempt,
             max_attempts,
         )
-        otp = _poll_gmail_for_otp(service)
+        otp = _poll_gmail_for_otp(service, query)
         if otp:
             return otp
         if attempt < max_attempts:
