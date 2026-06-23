@@ -1,6 +1,8 @@
 .env
 .env.local
 creds.json
+gmail_token.json
+gmail_oauth_client.json
 *.json.bak
 __pycache__/
 *.py[cod]

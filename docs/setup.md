@@ -79,10 +79,11 @@ Paste the JSON into the `GARMINTOKENS` repository secret.
 |--------|--------|
 | `GARMIN_EMAIL` | Garmin login email |
 | `GARMIN_PASSWORD` | Garmin password |
-| `GARMINTOKENS` | Full JSON from `scripts/export_tokens.py` |
+| `GARMINTOKENS` | Full JSON from `scripts/export_tokens.py` (optional if using Gmail OTP) |
 | `TELEGRAM_TOKEN` | Bot token |
 | `TELEGRAM_CHAT_ID` | Your chat ID |
 | `GOOGLE_CREDS_JSON` | Entire `creds.json` contents |
+| `GMAIL_OAUTH_JSON` | Gmail OAuth user JSON (`gmail.readonly`) for automatic Garmin MFA on CI |
 
 Optional **repository variables** (Settings → Actions → Variables):
 
@@ -100,6 +101,8 @@ Optional **repository variables** (Settings → Actions → Variables):
 **Secret:** `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey).
 
 With `GARMINTOKENS` set, Actions should not prompt for MFA. Keep email/password as fallback when tokens expire.
+
+**Gmail OTP (recommended for CI):** Set `GMAIL_OAUTH_JSON` to the JSON from `gmail_token.json` (see `jsonscript.py`). Enable Gmail API on your Google Cloud project. Each run logs in fresh with `GARMIN_EMAIL`/`GARMIN_PASSWORD` and reads the Garmin verification email automatically. You can remove the `GARMINTOKENS` secret when using this flow.
 
 **Index S2:** does not measure visceral fat; the visceral line appears only if your sheet has that data (other scales).
 
@@ -121,7 +124,7 @@ Default schedule: **11:00 IST** (`30 5 * * *` UTC). Edit `cron` in the workflow 
 
 | Problem | Fix |
 |---------|-----|
-| MFA in GitHub Actions | Run `python -m garmin_bia_sync` locally; update `GARMINTOKENS`. |
+| MFA in GitHub Actions | Set `GMAIL_OAUTH_JSON` (Gmail OTP) or run locally and update `GARMINTOKENS`. |
 | Sheet not found | Match `GOOGLE_SHEET_NAME`; service account must be Editor. |
 | No data for today | At 11:00 IST today may be empty if you weigh later — expected. Yesterday is retried via `SYNC_LOOKBACK_DAYS=2`. |
 | Late weigh-in after 11:00 | Appears on the next run (yesterday’s date in the lookback window). |

@@ -9,6 +9,7 @@ import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from getpass import getpass
+from pathlib import Path
 from typing import Any
 
 import gspread
@@ -21,6 +22,7 @@ from garminconnect import (
 )
 
 from garmin_bia_sync.analysis import maybe_send_coach_analysis
+from garmin_bia_sync.gmail_otp import fetch_garmin_otp_from_gmail, gmail_otp_configured
 from garmin_bia_sync.notify import send_telegram
 from garmin_bia_sync.report import (
     format_daily_telegram,
@@ -51,6 +53,64 @@ SHEET_HEADERS = [
 ]
 
 GRAMS_THRESHOLD = 1000
+DEFAULT_TOKENSTORE = "~/.garminconnect"
+
+
+def _effective_tokenstore() -> str:
+    """When Gmail OTP is enabled, use a file path so each run re-authenticates."""
+    raw = os.getenv("GARMINTOKENS", DEFAULT_TOKENSTORE)
+    if gmail_otp_configured() and len(raw) > 512:
+        return str(Path(DEFAULT_TOKENSTORE).expanduser())
+    return raw
+
+
+def _garmin_token_file_paths() -> list[Path]:
+    paths: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path) -> None:
+        resolved = path.expanduser()
+        if resolved not in seen:
+            seen.add(resolved)
+            paths.append(resolved)
+
+    add(Path.home() / ".garminconnect" / "garmin_tokens.json")
+    raw = os.getenv("GARMINTOKENS", DEFAULT_TOKENSTORE)
+    if len(raw) <= 512:
+        p = Path(raw).expanduser()
+        if p.is_dir() or not p.name.endswith(".json"):
+            add(p / "garmin_tokens.json")
+        else:
+            add(p)
+    return paths
+
+
+def delete_garmin_token_files() -> None:
+    """Remove persisted Garmin session tokens so the next run re-authenticates."""
+    for path in _garmin_token_file_paths():
+        if path.is_file():
+            path.unlink()
+            logger.info("Deleted Garmin token file: %s", path)
+
+
+def _clear_tokens_after_successful_sync() -> None:
+    if gmail_otp_configured():
+        delete_garmin_token_files()
+
+
+def _prompt_mfa() -> str:
+    mfa_code = os.getenv("GARMIN_MFA")
+    if mfa_code:
+        return mfa_code.strip()
+    if gmail_otp_configured():
+        logger.info("GMAIL_OAUTH_JSON set; polling Gmail for Garmin MFA code")
+        return fetch_garmin_otp_from_gmail()
+    if sys.stdin.isatty():
+        return input("Garmin MFA code: ").strip()
+    raise GarminConnectAuthenticationError(
+        "MFA required but no interactive terminal. Set GARMIN_MFA, GMAIL_OAUTH_JSON, "
+        "or GARMINTOKENS."
+    )
 
 
 def _parse_number(value: Any) -> float | None:
@@ -82,23 +142,13 @@ def _grams_field_to_kg(value: float | int | None) -> float | None:
 
 
 def init_garmin() -> Garmin:
-    tokenstore = os.getenv("GARMINTOKENS", "~/.garminconnect")
+    tokenstore = _effective_tokenstore()
     email = os.getenv("GARMIN_EMAIL")
     password = os.getenv("GARMIN_PASSWORD")
-    mfa_code = os.getenv("GARMIN_MFA")
-
-    def prompt_mfa() -> str:
-        if mfa_code:
-            return mfa_code.strip()
-        if sys.stdin.isatty():
-            return input("Garmin MFA code: ").strip()
-        raise GarminConnectAuthenticationError(
-            "MFA required but no interactive terminal. Set GARMIN_MFA or GARMINTOKENS."
-        )
 
     try:
         if email and password:
-            garmin = Garmin(email=email, password=password, prompt_mfa=prompt_mfa)
+            garmin = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa)
         else:
             garmin = Garmin()
         garmin.login(tokenstore)
@@ -116,7 +166,7 @@ def init_garmin() -> Garmin:
 
 def credential_login_if_needed() -> Garmin:
     """Interactive login when tokens are missing (first local run)."""
-    tokenstore = os.getenv("GARMINTOKENS", "~/.garminconnect")
+    tokenstore = _effective_tokenstore()
     try:
         return init_garmin()
     except GarminConnectAuthenticationError:
@@ -128,9 +178,7 @@ def credential_login_if_needed() -> Garmin:
     garmin = Garmin(
         email=email,
         password=password,
-        prompt_mfa=lambda: (
-            os.getenv("GARMIN_MFA") or input("Garmin MFA code: ").strip()
-        ),
+        prompt_mfa=_prompt_mfa,
     )
     garmin.login(tokenstore)
     logger.info("Garmin login OK. Tokens saved under %s", tokenstore)
@@ -268,6 +316,9 @@ def main() -> int:
     sync_dates = dates_for_run()
     single_day_mode = os.getenv("SYNC_DATE") is not None
 
+    if gmail_otp_configured():
+        delete_garmin_token_files()
+
     try:
         garmin = credential_login_if_needed()
         worksheet = open_worksheet()
@@ -304,6 +355,7 @@ def main() -> int:
             logger.info("Telegram data digest for %s:\n%s", report_date.isoformat(), message)
             if today_has_weigh_in(history):
                 maybe_send_coach_analysis(history, report_date, message)
+            _clear_tokens_after_successful_sync()
             return 0
 
         plan = plan_daily_telegram(history, synced_dates)
@@ -324,6 +376,7 @@ def main() -> int:
                 "No weigh-ins in sync window (%s); sheet unchanged.",
                 ", ".join(sync_dates),
             )
+        _clear_tokens_after_successful_sync()
         return 0
 
     except Exception as exc:

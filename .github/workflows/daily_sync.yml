@@ -38,4 +38,5 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           ANALYSIS_LOOKBACK_DAYS: ${{ vars.ANALYSIS_LOOKBACK_DAYS }}
           USER_GOAL: ${{ vars.USER_GOAL }}
+          GMAIL_OAUTH_JSON: ${{ secrets.GMAIL_OAUTH_JSON }}
         run: python -m garmin_bia_sync
