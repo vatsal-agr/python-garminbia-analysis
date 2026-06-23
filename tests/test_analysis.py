@@ -11,6 +11,7 @@ from garmin_bia_sync.analysis import (
     _system_prompt,
     analysis_enabled,
     build_analysis_payload,
+    sanitize_coach_text,
 )
 from garmin_bia_sync.report import DayMetrics
 
@@ -59,3 +60,15 @@ def test_coach_error_telegram_quota() -> None:
     msg = coach_error_telegram(Exception("429 quota exceeded"))
     assert "quota" in msg.lower()
     assert _is_quota_error(Exception("RESOURCE_EXHAUSTED"))
+
+
+def test_sanitize_coach_text_strips_markdown() -> None:
+    raw = "**Verdict:** on track\n* hydration\n**FFM** up 0.2 kg\n* first bullet\n* second"
+    assert sanitize_coach_text(raw) == (
+        "Verdict: on track\n• hydration\nFFM up 0.2 kg\n• first bullet\n• second"
+    )
+
+
+def test_system_prompt_forbids_markdown() -> None:
+    prompt = _system_prompt().lower()
+    assert "no markdown" in prompt or "do not use **bold**" in prompt

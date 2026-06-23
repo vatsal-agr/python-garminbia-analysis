@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import date, timedelta
 from typing import Any
@@ -205,7 +206,11 @@ DEPTH — every message must include:
    - If both are on-target but weigh-in count < 5 of last 7 days → lever is consistency.
    Do not default to a generic "stay consistent" if a higher-priority lever applies.
 
-FORMAT (plain text, use these labels exactly):
+FORMAT (plain text only — no markdown):
+- Do NOT use **bold**, *italic*, __underline__, or # headings.
+- Use the emoji section labels below exactly.
+- For bullet lists under 🔍 Likely drivers, start each line with "• " (not asterisk).
+
 📊 Verdict: (1–2 sentences, numbers inline)
 📈 What changed: (short paragraphs; explain deltas, not just list them)
 🔍 Likely drivers: (3–5 bullets — training, intake, sleep, hydration, measurement)
@@ -216,6 +221,16 @@ Confidence: [High / Medium / Low] — one sentence.
   Low    = ≤3 weigh-ins, or CV > 2%
 
 ~400–550 words max."""
+
+
+def sanitize_coach_text(text: str) -> str:
+    """Strip markdown Gemini adds; Telegram sendMessage uses plain text (no parse_mode)."""
+    cleaned = text.strip()
+    cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.+?)__", r"\1", cleaned)
+    cleaned = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", cleaned)
+    cleaned = re.sub(r"(?m)^\* ", "• ", cleaned)
+    return cleaned.strip()
 
 
 def _is_quota_error(exc: BaseException) -> bool:
@@ -304,10 +319,11 @@ def generate_coach_message(
     payload = build_analysis_payload(history, report_date, data_message)
     user_prompt = (
         "Write message 2 only. Start with the 📊 Verdict line — no intro before it.\n"
+        "Plain text only: no **bold**, no *italic*, no markdown.\n"
         "JSON:\n"
         f"{json.dumps(payload, separators=(',', ':'))}"
     )
-    return _call_gemini(user_prompt)
+    return sanitize_coach_text(_call_gemini(user_prompt))
 
 
 def maybe_send_coach_analysis(
